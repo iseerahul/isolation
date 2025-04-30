@@ -100,6 +100,8 @@ def experimental_validation():
         "Paris is the capital city of France.",
         "Plants require carbon dioxide for survival.", # outlier
         "Paris is one of the most popular tourist destinations in the world.",
+        "indian cuisine is known for its diverse flavors and spices.", # outlier
+        "the children are playing in the park.",# outlier
         "France is renowned for its art, cuisine, and history, attracting millions of visitors annually.",
         "The Eiffel Tower, located in Paris, is an iconic symbol of French culture.",
         "The French government operates from the Palais Bourbon and the Élysée Palace.",
