@@ -32,12 +32,43 @@ class ResidualBlock(nn.Module):
         return self.norm(x + self.ff(x))
 
 class CIFv3(nn.Module):
-    def __init__(self, dim=384, depth=4):
+    def __init__(self, dim=384, depth=4, num_heads=4):
         super().__init__()
+        # Add MCP-specific components
+        self.context_gate = nn.Sequential(
+            nn.Linear(dim, dim),
+            nn.Sigmoid()
+        )
+        self.security_layer = nn.ModuleList([
+            nn.MultiheadAttention(dim, num_heads) for _ in range(depth)
+        ])
         self.stack = nn.Sequential(*[ResidualBlock(dim) for _ in range(depth)])
+        
+        # Add leakage prevention
+        self.leakage_detector = nn.Sequential(
+            nn.Linear(dim, dim // 2),
+            nn.ReLU(),
+            nn.Linear(dim // 2, 1),
+            nn.Sigmoid()
+        )
 
     def forward(self, x):
-        return self.stack(x)
+        # Apply context gating
+        gate = self.context_gate(x)
+        x = x * gate
+        
+        # Apply security attention layers
+        for attn in self.security_layer:
+            attn_out, _ = attn(x.unsqueeze(0), x.unsqueeze(0), x.unsqueeze(0))
+            x = x + attn_out.squeeze(0)
+        
+        # Apply standard isolation
+        x = self.stack(x)
+        
+        # Check for potential leakage
+        leakage_score = self.leakage_detector(x)
+        
+        return x, leakage_score
 
 # ========== 3️ Metrics ==========
 def euclidean(a, b):
@@ -97,7 +128,7 @@ def evaluate(contexts):
     model = CIFv3()
     embeddings = [get_embedding(c) for c in contexts]
     baseline = [e.clone().detach() for e in embeddings]
-    cif_out = [model(e) for e in embeddings]
+    cif_out = [model(e)[0] for e in embeddings]
 
     X = torch.stack(cif_out).detach().numpy()
     cov = np.cov(X, rowvar=False) + np.eye(X.shape[1]) * 1e-6

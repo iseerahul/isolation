@@ -18,13 +18,33 @@ from io import StringIO
 from tqdm import tqdm
 import random
 import argparse
+import time
+from cryptography.fernet import Fernet
+import json
+import base64
+from scipy import stats
 
-# ========== 1️⃣ Embedding Loader ==========
+# Set random seeds for reproducibility
+RANDOM_SEED = 42
+torch.manual_seed(RANDOM_SEED)
+torch.cuda.manual_seed(RANDOM_SEED)
+np.random.seed(RANDOM_SEED)
+random.seed(RANDOM_SEED)
+
+# Initialize tokenizer and model globally
+tokenizer = None
+model = None
+
 def load_model(model_name="sentence-transformers/all-MiniLM-L6-v2"):
+    """Load model and tokenizer globally"""
+    global tokenizer, model
     print(f"Loading model: {model_name}")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModel.from_pretrained(model_name).eval()
     return tokenizer, model
+
+# Call load_model at startup
+tokenizer, model = load_model()
 
 @torch.no_grad()
 def get_embedding(text, tokenizer, model, batch_size=32):
@@ -332,6 +352,67 @@ def hybrid_score(a, b, cov_inv):
     k = kl_div(a, b)
     return (e + c + m + k) / 4
 
+# Statistical analysis functions
+def calculate_confidence_interval(data, confidence=0.95):
+    """Calculate confidence interval for a list of values."""
+    data = np.array(data)
+    n = len(data)
+    mean = np.mean(data)
+    se = stats.sem(data)
+    ci = stats.t.interval(confidence, n-1, loc=mean, scale=se)
+    return mean, ci
+
+def run_multiple_trials(evaluate_fn, n_trials=5):
+    """Run multiple trials and collect statistics."""
+    results = {
+        'ari_baseline': [],
+        'ari_cif': [],
+        'nmi_baseline': [],
+        'nmi_cif': [],
+        'distance_baseline': [],
+        'distance_cif': [],
+        'ari_improvement': [],
+        'nmi_improvement': [],
+        'distance_improvement': []
+    }
+    
+    for trial in range(n_trials):
+        print(f"\nTrial {trial + 1}/{n_trials}")
+        trial_results = evaluate_fn()
+        
+        # Store basic metrics
+        results['ari_baseline'].append(trial_results['baseline']['adjusted_rand_index'])
+        results['ari_cif'].append(trial_results['cifv3']['adjusted_rand_index'])
+        results['nmi_baseline'].append(trial_results['baseline']['normalized_mutual_info'])
+        results['nmi_cif'].append(trial_results['cifv3']['normalized_mutual_info'])
+        results['distance_baseline'].append(np.mean(trial_results['baseline_distances']))
+        results['distance_cif'].append(np.mean(trial_results['cif_distances']))
+        
+        # Calculate improvements
+        ari_imp = ((trial_results['cifv3']['adjusted_rand_index'] - trial_results['baseline']['adjusted_rand_index']) / 
+                   max(abs(trial_results['baseline']['adjusted_rand_index']), 1e-10)) * 100
+        nmi_imp = ((trial_results['cifv3']['normalized_mutual_info'] - trial_results['baseline']['normalized_mutual_info']) / 
+                   max(abs(trial_results['baseline']['normalized_mutual_info']), 1e-10)) * 100
+        dist_imp = ((np.mean(trial_results['cif_distances']) - np.mean(trial_results['baseline_distances'])) / 
+                    max(abs(np.mean(trial_results['baseline_distances'])), 1e-10)) * 100
+        
+        results['ari_improvement'].append(ari_imp)
+        results['nmi_improvement'].append(nmi_imp)
+        results['distance_improvement'].append(dist_imp)
+    
+    # Calculate statistics
+    stats_results = {}
+    for metric, values in results.items():
+        mean, (ci_low, ci_high) = calculate_confidence_interval(values)
+        stats_results[metric] = {
+            'mean': mean,
+            'std': np.std(values),
+            'ci_low': ci_low,
+            'ci_high': ci_high
+        }
+    
+    return stats_results
+
 # ========== 6️⃣ Main Evaluation Pipeline ==========
 def evaluate_dataset(texts, labels, categories, model_name="sentence-transformers/all-MiniLM-L6-v2", batch_size=32):
     # Load model
@@ -450,6 +531,8 @@ def main():
                         help='Batch size for embedding computation')
     parser.add_argument('--n_samples', type=int, default=1000,
                         help='Number of samples to use from dataset')
+    parser.add_argument('--n_trials', type=int, default=5,
+                        help='Number of trials to run for statistical analysis')
     
     args = parser.parse_args()
     
@@ -476,8 +559,25 @@ def main():
     
     print(f"Loaded {len(texts)} samples with {len(set(categories))} categories")
     
-    # Run evaluation
-    evaluate_dataset(texts, labels, categories, model_name=args.model, batch_size=args.batch_size)
+    # Run evaluation with multiple trials
+    stats_results = run_multiple_trials(
+        lambda: evaluate_dataset(texts, labels, categories, model_name=args.model, batch_size=args.batch_size),
+        n_trials=args.n_trials
+    )
+    
+    # Print statistical results
+    print("\n📊 Statistical Results (mean ± 95% CI):")
+    print(f"Baseline ARI: {stats_results['ari_baseline']['mean']:.4f} ± {(stats_results['ari_baseline']['ci_high'] - stats_results['ari_baseline']['ci_low'])/2:.4f}")
+    print(f"CIFv3 ARI: {stats_results['ari_cif']['mean']:.4f} ± {(stats_results['ari_cif']['ci_high'] - stats_results['ari_cif']['ci_low'])/2:.4f}")
+    print(f"Baseline NMI: {stats_results['nmi_baseline']['mean']:.4f} ± {(stats_results['nmi_baseline']['ci_high'] - stats_results['nmi_baseline']['ci_low'])/2:.4f}")
+    print(f"CIFv3 NMI: {stats_results['nmi_cif']['mean']:.4f} ± {(stats_results['nmi_cif']['ci_high'] - stats_results['nmi_cif']['ci_low'])/2:.4f}")
+    print(f"Baseline Distance: {stats_results['distance_baseline']['mean']:.4f} ± {(stats_results['distance_baseline']['ci_high'] - stats_results['distance_baseline']['ci_low'])/2:.4f}")
+    print(f"CIFv3 Distance: {stats_results['distance_cif']['mean']:.4f} ± {(stats_results['distance_cif']['ci_high'] - stats_results['distance_cif']['ci_low'])/2:.4f}")
+    
+    print("\nImprovements (mean ± 95% CI):")
+    print(f"ARI: {stats_results['ari_improvement']['mean']:.2f}% ± {(stats_results['ari_improvement']['ci_high'] - stats_results['ari_improvement']['ci_low'])/2:.2f}%")
+    print(f"NMI: {stats_results['nmi_improvement']['mean']:.2f}% ± {(stats_results['nmi_improvement']['ci_high'] - stats_results['nmi_improvement']['ci_low'])/2:.2f}%")
+    print(f"Distance: {stats_results['distance_improvement']['mean']:.2f}% ± {(stats_results['distance_improvement']['ci_high'] - stats_results['distance_improvement']['ci_low'])/2:.2f}%")
 
 if __name__ == "__main__":
     main()

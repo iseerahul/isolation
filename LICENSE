@@ -1,0 +1,26 @@
+MIT License with Research Restrictions
+
+Copyright (c) 2025 Rahul Yadav
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software subject to the following conditions:
+
+1. Academic and Research Use:
+   - The Software may be used freely for academic research purposes
+   - Any publication using or building upon this Software must cite the original paper
+   - Commercial use requires explicit written permission from the copyright holder
+
+2. Derivative Works:
+   - Must clearly indicate changes made to the original Software
+   - Must be released under the same license terms
+   - Must cite the original work as specified in the README
+
+3. Attribution Requirements:
+   - All publications and presentations using this Software must cite:
+     "CIF: A Novel Framework for Context Isolation in Language Model Embeddings"
+   - The original copyright notice must be included in all copies
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
