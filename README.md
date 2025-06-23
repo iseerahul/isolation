@@ -1,4 +1,4 @@
-# CIF3: Context Isolation Framework v3Add commentMore actions
+# CIF3: Context Isolation Framework 
 
 CIF3 is a novel research framework and implementation for **explicit context isolation in language model embeddings**. It is designed to address the challenge of context leakage in large language models (LLMs) by enforcing clear boundaries between different contexts within the embedding space. This repository contains the code, experiments, and evaluation metrics for CIF3.
 
