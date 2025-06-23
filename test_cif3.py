@@ -259,24 +259,38 @@ def cluster_and_evaluate(embeddings, labels, title="", k=None, sample_size=1000)
         cluster_labels = kmeans.fit_predict(X)
     except ValueError as e:
         if "Buffer dtype mismatch" in str(e):
-            # Try again with explicit dtype conversion
             X = np.array(X, dtype=np.float64)
             X_sample = np.array(X_sample, dtype=np.float64)
             cluster_labels = kmeans.fit_predict(X)
         else:
             raise
-    
+
     # Apply dimensionality reduction for visualization
     pca = PCA(n_components=2)
     X_pca = pca.fit_transform(X_sample)
-    
+
     # Calculate metrics
-    if len(set(labels)) > 1:  # Only calculate if we have ground truth labels
+    if len(set(labels)) > 1:
         rand_score = adjusted_rand_score(labels, cluster_labels)
         nmi_score = normalized_mutual_info_score(labels, cluster_labels)
+        # --- Categorization Accuracy ---
+        from collections import Counter, defaultdict
+        cluster_to_label = {}
+        cluster_indices = defaultdict(list)
+        for idx, c in enumerate(cluster_labels):
+            cluster_indices[c].append(idx)
+        for c, idxs in cluster_indices.items():
+            true_labels = [labels[i] for i in idxs]
+            if true_labels:
+                most_common = Counter(true_labels).most_common(1)[0][0]
+                cluster_to_label[c] = most_common
+            else:
+                cluster_to_label[c] = -1
+        predicted_labels = [cluster_to_label[c] for c in cluster_labels]
+        categorization_accuracy = np.mean(np.array(predicted_labels) == np.array(labels))
     else:
-        rand_score = nmi_score = 0
-    
+        rand_score = nmi_score = categorization_accuracy = 0
+
     # Visualization
     plt.figure(figsize=(10, 8))
     
@@ -302,10 +316,11 @@ def cluster_and_evaluate(embeddings, labels, title="", k=None, sample_size=1000)
     plt.tight_layout()
     plt.savefig(f"{title.replace(' ', '_')}_predicted.png")
     plt.close()
-    
+
     return {
         "adjusted_rand_index": rand_score,
         "normalized_mutual_info": nmi_score,
+        "categorization_accuracy": categorization_accuracy,
         "num_clusters": k
     }
 
@@ -369,10 +384,13 @@ def run_multiple_trials(evaluate_fn, n_trials=5):
         'ari_cif': [],
         'nmi_baseline': [],
         'nmi_cif': [],
+        'acc_baseline': [],
+        'acc_cif': [],
         'distance_baseline': [],
         'distance_cif': [],
         'ari_improvement': [],
         'nmi_improvement': [],
+        'acc_improvement': [],
         'distance_improvement': []
     }
     
@@ -385,6 +403,8 @@ def run_multiple_trials(evaluate_fn, n_trials=5):
         results['ari_cif'].append(trial_results['cifv3']['adjusted_rand_index'])
         results['nmi_baseline'].append(trial_results['baseline']['normalized_mutual_info'])
         results['nmi_cif'].append(trial_results['cifv3']['normalized_mutual_info'])
+        results['acc_baseline'].append(trial_results['baseline']['categorization_accuracy'])
+        results['acc_cif'].append(trial_results['cifv3']['categorization_accuracy'])
         results['distance_baseline'].append(np.mean(trial_results['baseline_distances']))
         results['distance_cif'].append(np.mean(trial_results['cif_distances']))
         
@@ -393,11 +413,14 @@ def run_multiple_trials(evaluate_fn, n_trials=5):
                    max(abs(trial_results['baseline']['adjusted_rand_index']), 1e-10)) * 100
         nmi_imp = ((trial_results['cifv3']['normalized_mutual_info'] - trial_results['baseline']['normalized_mutual_info']) / 
                    max(abs(trial_results['baseline']['normalized_mutual_info']), 1e-10)) * 100
+        acc_imp = ((trial_results['cifv3']['categorization_accuracy'] - trial_results['baseline']['categorization_accuracy']) / 
+                   max(abs(trial_results['baseline']['categorization_accuracy']), 1e-10)) * 100
         dist_imp = ((np.mean(trial_results['cif_distances']) - np.mean(trial_results['baseline_distances'])) / 
                     max(abs(np.mean(trial_results['baseline_distances'])), 1e-10)) * 100
         
         results['ari_improvement'].append(ari_imp)
         results['nmi_improvement'].append(nmi_imp)
+        results['acc_improvement'].append(acc_imp)
         results['distance_improvement'].append(dist_imp)
     
     # Calculate statistics
@@ -488,6 +511,8 @@ def evaluate_dataset(texts, labels, categories, model_name="sentence-transformer
     print(f"CIFv3 Adjusted Rand Index: {cif_results['adjusted_rand_index']:.4f}")
     print(f"Baseline Normalized Mutual Information: {baseline_results['normalized_mutual_info']:.4f}")
     print(f"CIFv3 Normalized Mutual Information: {cif_results['normalized_mutual_info']:.4f}")
+    print(f"Baseline Categorization Accuracy: {baseline_results['categorization_accuracy']:.4f}")
+    print(f"CIFv3 Categorization Accuracy: {cif_results['categorization_accuracy']:.4f}")
     print(f"Baseline Mean Inter-Category Distance: {np.mean(baseline_distances):.4f}")
     print(f"CIFv3 Mean Inter-Category Distance: {np.mean(cif_distances):.4f}")
     
@@ -496,12 +521,15 @@ def evaluate_dataset(texts, labels, categories, model_name="sentence-transformer
                        max(abs(baseline_results['adjusted_rand_index']), 1e-10)) * 100
     nmi_improvement = ((cif_results['normalized_mutual_info'] - baseline_results['normalized_mutual_info']) / 
                        max(abs(baseline_results['normalized_mutual_info']), 1e-10)) * 100
+    acc_improvement = ((cif_results['categorization_accuracy'] - baseline_results['categorization_accuracy']) / 
+                       max(abs(baseline_results['categorization_accuracy']), 1e-10)) * 100
     distance_improvement = ((np.mean(cif_distances) - np.mean(baseline_distances)) / 
                            max(abs(np.mean(baseline_distances)), 1e-10)) * 100
     
     print(f"\nCIFv3 Improvements:")
     print(f"Adjusted Rand Index: {ari_improvement:.2f}%")
     print(f"Normalized Mutual Information: {nmi_improvement:.2f}%")
+    print(f"Categorization Accuracy: {acc_improvement:.2f}%")
     print(f"Inter-Category Distance: {distance_improvement:.2f}%")
     
     return {
@@ -571,12 +599,15 @@ def main():
     print(f"CIFv3 ARI: {stats_results['ari_cif']['mean']:.4f} ± {(stats_results['ari_cif']['ci_high'] - stats_results['ari_cif']['ci_low'])/2:.4f}")
     print(f"Baseline NMI: {stats_results['nmi_baseline']['mean']:.4f} ± {(stats_results['nmi_baseline']['ci_high'] - stats_results['nmi_baseline']['ci_low'])/2:.4f}")
     print(f"CIFv3 NMI: {stats_results['nmi_cif']['mean']:.4f} ± {(stats_results['nmi_cif']['ci_high'] - stats_results['nmi_cif']['ci_low'])/2:.4f}")
+    print(f"Baseline Accuracy: {stats_results['acc_baseline']['mean']:.4f} ± {(stats_results['acc_baseline']['ci_high'] - stats_results['acc_baseline']['ci_low'])/2:.4f}")
+    print(f"CIFv3 Accuracy: {stats_results['acc_cif']['mean']:.4f} ± {(stats_results['acc_cif']['ci_high'] - stats_results['acc_cif']['ci_low'])/2:.4f}")
     print(f"Baseline Distance: {stats_results['distance_baseline']['mean']:.4f} ± {(stats_results['distance_baseline']['ci_high'] - stats_results['distance_baseline']['ci_low'])/2:.4f}")
     print(f"CIFv3 Distance: {stats_results['distance_cif']['mean']:.4f} ± {(stats_results['distance_cif']['ci_high'] - stats_results['distance_cif']['ci_low'])/2:.4f}")
     
     print("\nImprovements (mean ± 95% CI):")
     print(f"ARI: {stats_results['ari_improvement']['mean']:.2f}% ± {(stats_results['ari_improvement']['ci_high'] - stats_results['ari_improvement']['ci_low'])/2:.2f}%")
     print(f"NMI: {stats_results['nmi_improvement']['mean']:.2f}% ± {(stats_results['nmi_improvement']['ci_high'] - stats_results['nmi_improvement']['ci_low'])/2:.2f}%")
+    print(f"Accuracy: {stats_results['acc_improvement']['mean']:.2f}% ± {(stats_results['acc_improvement']['ci_high'] - stats_results['acc_improvement']['ci_low'])/2:.2f}%")
     print(f"Distance: {stats_results['distance_improvement']['mean']:.2f}% ± {(stats_results['distance_improvement']['ci_high'] - stats_results['distance_improvement']['ci_low'])/2:.2f}%")
 
 if __name__ == "__main__":
